@@ -1,5 +1,5 @@
-// Biblioteka obsługująca stosy rekurencyjne.
-// Wykorzystuje zliczanie referencji oraz algorytm Trial Deletion (Bacon) do wykrywania i usuwania izolowanych cykli.
+// Library implementing recursive stacks.
+// Uses reference counting and the Trial Deletion algorithm (Bacon) to detect and remove isolated cycles.
 
 #include "rstack.h"
 #include <stdlib.h>
@@ -9,13 +9,13 @@
 #include <string.h>
 #include <ctype.h>
 
-// Typy elementów, jakie mogą znajdować się na stosie
+// Types of elements that can be stored on the stack
 typedef enum {
     ITEM_IS_NUMBER,
     ITEM_IS_RSTACK
 } node_kind_t;
 
-// Struktura pojedynczego węzła na liście
+// Structure of a single node in the list
 typedef struct stack_node {
     struct stack_node *next;
     node_kind_t kind;
@@ -25,23 +25,23 @@ typedef struct stack_node {
     };
 } stack_node_t;
 
-// Stałe używane przez Garbage Collector do śledzenia cykli
+// Constants used by the Garbage Collector to track cycles
 #define GC_SAFE   0
 #define GC_CHECK  1
 #define GC_TRASH  2
 
-// Główna struktura reprezentująca stos
+// Main structure representing the stack
 struct rstack {
-    stack_node_t *top_node;    // Wskaźnik na wierzchołek stosu.
-    struct rstack *free_chain; // Wskaźnik pomocniczy używany przez GC do budowania listy śmieci.
-    size_t references;         // Licznik referencji.
-    int gc_status;             // Stan węzła w algorytmie detekcji cykli.
-    bool dfs_flag;             // Flaga DFS: true gdy węzeł był odwiedzony w bieżącym wywołaniu rstack_front.
-    bool is_visited;           // Flaga blokady ponownego wejścia podczas DFS.
+    stack_node_t *top_node;    // Pointer to the top of the stack.
+    struct rstack *free_chain; // Helper pointer used by the GC to build the garbage list.
+    size_t references;         // Reference counter.
+    int gc_status;             // Node state in the cycle detection algorithm.
+    bool dfs_flag;             // DFS flag: true when the node was visited during the current rstack_front call.
+    bool is_visited;           // Re-entry lock flag during DFS.
 };
 
-// Funkcja pomocnicza: odwraca kierunek powiązań na liście węzłów.
-// Wykorzystywana przy zapisie, by wypisywać elementy od dna stosu.
+// Helper function: reverses the direction of the links in the node list.
+// Used during writing, to print elements starting from the bottom of the stack.
 static stack_node_t *invert_list_order(stack_node_t *head) {
     stack_node_t *prev = nullptr, *curr = head;
     while (curr) {
@@ -53,7 +53,7 @@ static stack_node_t *invert_list_order(stack_node_t *head) {
     return prev;
 }
 
-// Tworzy nowy, pusty stos i inicjalizuje jego składowe.
+// Creates a new, empty stack and initializes its fields.
 rstack_t *rstack_new(void) {
     rstack_t *rs = malloc(sizeof(rstack_t));
     if (!rs) {
@@ -71,7 +71,7 @@ rstack_t *rstack_new(void) {
     return rs;
 }
 
-// Faza 1 algorytmu Trial Deletion: oznacza węzły do sprawdzenia i tymczasowo odejmuje referencje wewnętrzne.
+// Phase 1 of the Trial Deletion algorithm: marks nodes for checking and temporarily subtracts internal references.
 static void mark_suspects(rstack_t *st) {
     if (st->gc_status == GC_CHECK) return;
     
@@ -85,7 +85,7 @@ static void mark_suspects(rstack_t *st) {
     }
 }
 
-// Przywraca stan GC_SAFE i odtwarza referencje dla węzłów "żywych".
+// Restores the GC_SAFE state and restores references for "alive" nodes.
 static void restore_alive(rstack_t *st) {
     st->gc_status = GC_SAFE;
 
@@ -99,7 +99,7 @@ static void restore_alive(rstack_t *st) {
     }
 }
 
-// Faza 2 algorytmu Trial Deletion: weryfikuje węzły i decyduje, które tworzą izolowany cykl.
+// Phase 2 of the Trial Deletion algorithm: verifies nodes and decides which ones form an isolated cycle.
 static void verify_isolation(rstack_t *st) {
     if (st->gc_status != GC_CHECK) return;
 
@@ -115,7 +115,7 @@ static void verify_isolation(rstack_t *st) {
     }
 }
 
-// Faza 3 algorytmu Trial Deletion: agreguje węzły do usunięcia na liście trash_list.
+// Phase 3 of the Trial Deletion algorithm: collects the nodes to be removed onto the trash_list.
 static void gather_garbage(rstack_t *st, rstack_t **trash_list) {
     if (st->gc_status != GC_TRASH) return;
 
@@ -136,14 +136,14 @@ static void gather_garbage(rstack_t *st, rstack_t **trash_list) {
     }
 }
 
-// Główna funkcja usuwająca referencję do stosu.
+// Main function that removes a reference to the stack.
 void rstack_delete(rstack_t *rs) {
     if (!rs) return;
 
     if (rs->references > 0) rs->references--;
 
     if (rs->references == 0) {
-        // Standardowe zwalnianie
+        // Standard freeing
         stack_node_t *node = rs->top_node;
         rs->top_node = nullptr;
 
@@ -157,7 +157,7 @@ void rstack_delete(rstack_t *rs) {
         }
         free(rs);
     } else {
-        // Potencjalny cykl
+        // Potential cycle
         mark_suspects(rs);
         verify_isolation(rs);
 
@@ -172,7 +172,7 @@ void rstack_delete(rstack_t *rs) {
     }
 }
 
-// Odkłada na wskazany stos nową wartość liczbową.
+// Pushes a new numeric value onto the given stack.
 int rstack_push_value(rstack_t *rs, uint64_t val) {
     if (!rs) {
         errno = EINVAL;
@@ -193,7 +193,7 @@ int rstack_push_value(rstack_t *rs, uint64_t val) {
     return 0;
 }
 
-// Odkłada referencję do drugiego stosu na pierwszy stos.
+// Pushes a reference to the second stack onto the first stack.
 int rstack_push_rstack(rstack_t *rs1, rstack_t *rs2) {
     if (!rs1 || !rs2) {
         errno = EINVAL;
@@ -215,7 +215,7 @@ int rstack_push_rstack(rstack_t *rs1, rstack_t *rs2) {
     return 0;
 }
 
-// Zdejmuje najwyższy element ze stosu.
+// Removes the top element from the stack.
 void rstack_pop(rstack_t *rs) {
     if (!rs || !rs->top_node) return;
 
@@ -228,7 +228,7 @@ void rstack_pop(rstack_t *rs) {
     free(old_top);
 }
 
-// DFS szukający najbliższej wartości liczbowej.
+// DFS searching for the nearest numeric value.
 static result_t find_top_number(rstack_t *st) {
     if (!st || st->is_visited) return (result_t){false, 0};
 
@@ -251,7 +251,7 @@ static result_t find_top_number(rstack_t *st) {
     return (result_t){false, 0};
 }
 
-// Czyści flagi DFS w odwiedzonych węzłach.
+// Clears the DFS flags in the visited nodes.
 static void wipe_dfs_marks(rstack_t *st) {
     if (!st || !st->dfs_flag) return;
 
@@ -265,19 +265,19 @@ static void wipe_dfs_marks(rstack_t *st) {
     }
 }
 
-// Interfejs do znajdowania najbliższej liczby pod wierzchołkiem stosu.
+// Interface for finding the nearest number under the top of the stack.
 result_t rstack_front(rstack_t *rs) {
     result_t res = find_top_number(rs);
     wipe_dfs_marks(rs);
     return res;
 }
 
-// Sprawdza czy stos zawiera jakąkolwiek wartość liczbową.
+// Checks whether the stack contains any numeric value.
 bool rstack_empty(rstack_t *rs) {
     return !rstack_front(rs).flag;
 }
 
-// Tworzy nowy stos na podstawie wartości liczbowych odczytanych z pliku.
+// Creates a new stack from numeric values read from a file.
 rstack_t *rstack_read(char const *path) {
     if (!path) {
         errno = EINVAL;
@@ -338,7 +338,7 @@ rstack_t *rstack_read(char const *path) {
     return rs;
 }
 
-// Funkcja robocza zapisująca zawartość stosu do pliku.
+// Function that writes the stack's contents to a file.
 static int dump_stack_content(rstack_t *st, FILE *out) {
     if (!st) return 0;
     if (st->is_visited) return 1;
@@ -364,7 +364,7 @@ static int dump_stack_content(rstack_t *st, FILE *out) {
     return status;
 }
 
-// Zapisuje wszystkie napotkane wartości liczbowe do pliku.
+// Writes all encountered numeric values to a file.
 int rstack_write(char const *path, rstack_t *rs) {
     if (!path || !rs) {
         errno = EINVAL;
